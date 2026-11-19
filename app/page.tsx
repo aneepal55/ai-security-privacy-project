@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import KnowledgeBasePanel from "./knowledge-base-panel";
 
 type Message = {
   role: "user" | "assistant";
@@ -13,6 +14,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [model, setModel] = useState("llama3.2");
+  const [activeView, setActiveView] = useState<"chat" | "knowledge">("chat");
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -91,6 +93,23 @@ export default function Home() {
           <span className="brand-name">CARE<span> / </span>COMPASS</span>
         </a>
 
+        <nav className="rail-nav" aria-label="Main navigation">
+          <button
+            type="button"
+            className={activeView === "chat" ? "rail-nav-button active" : "rail-nav-button"}
+            onClick={() => setActiveView("chat")}
+          >
+            <span aria-hidden="true">✳</span> Chat
+          </button>
+          <button
+            type="button"
+            className={activeView === "knowledge" ? "rail-nav-button active" : "rail-nav-button"}
+            onClick={() => setActiveView("knowledge")}
+          >
+            <span aria-hidden="true">▤</span> Knowledge Base
+          </button>
+        </nav>
+
         <div className="rail-copy">
           <p className="rail-label">HEALTH ASSISTANT</p>
           <div className="workspace-card">
@@ -113,6 +132,7 @@ export default function Home() {
         </div>
       </aside>
 
+      {activeView === "chat" ? (
       <section className="chat-panel" id="chat" aria-label="Chat">
         <header className="chat-header">
           <div className="header-title">
@@ -220,6 +240,9 @@ export default function Home() {
           <p className="medical-note">Not for emergencies or a substitute for care from a qualified health professional.</p>
         </footer>
       </section>
+      ) : (
+        <KnowledgeBasePanel />
+      )}
     </main>
   );
 }
