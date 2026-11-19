@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Security & Privacy Assistant",
-  description: "A chat assistant ready for RAG integration",
+  title: "Care Compass | Health & Wellness Assistant",
+  description: "A local AI assistant for general health and wellness information",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
