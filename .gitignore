@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# private documents for RAG (keep the sample)
+docs/*
+!docs/sample.md

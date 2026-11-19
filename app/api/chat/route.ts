@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildSystemPrompt, retrieveContext, type RetrievedChunk } from "@/lib/rag";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -67,49 +68,112 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // RAG: look up relevant chunks in Supabase. If it fails, fall back to plain chat.
+  let chunks: RetrievedChunk[] = [];
   try {
-    const ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
+    chunks = await retrieveContext(content);
+  } catch (error) {
+    console.error("RAG retrieval failed:", error);
+  }
+  const ollamaMessages = chunks.length > 0
+    ? [{ role: "system", content: buildSystemPrompt(chunks) }, ...messages]
+    : messages;
+  const sources = [...new Set(chunks.map((c) => c.source))];
+
+  let ollamaResponse: Response;
+  try {
+    ollamaResponse = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(120_000),
+      body: JSON.stringify({ model, messages: ollamaMessages, stream: true }),
+      signal: AbortSignal.timeout(300_000),
     });
-
-    if (!ollamaResponse.ok) {
-      const details = await ollamaResponse.text();
-      return NextResponse.json(
-        {
-          message: ollamaResponse.status === 404
-            ? `Ollama could not find the ${model} model. Run “ollama pull ${model}” in Terminal.`
-            : `Ollama returned an error: ${details || ollamaResponse.statusText}`,
-        },
-        { status: 502 },
-      );
-    }
-
-    const result = await ollamaResponse.json();
-    const answer = result?.message?.content;
-    if (typeof answer !== "string" || !answer.trim()) {
-      return NextResponse.json(
-        { message: "Ollama returned an empty response. Please try again." },
-        { status: 502 },
-      );
-    }
-
-    return NextResponse.json({ message: answer.trim() });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "TimeoutError";
     return NextResponse.json(
       {
         message: timedOut
           ? "The local model took too long to respond. Please try again."
-          : "Could not connect to Ollama at http://127.0.0.1:11434. Make sure Ollama is running, then try again.",
+          : `Could not connect to Ollama at ${OLLAMA_URL}. Make sure Ollama is running, then try again.`,
       },
       { status: 503 },
     );
   }
+
+  if (!ollamaResponse.ok || !ollamaResponse.body) {
+    const details = await ollamaResponse.text().catch(() => "");
+    return NextResponse.json(
+      {
+        message: ollamaResponse.status === 404
+          ? `Ollama could not find the ${model} model. Run “ollama pull ${model}” in your terminal.`
+          : `Ollama returned an error: ${details || ollamaResponse.statusText}`,
+      },
+      { status: 502 },
+    );
+  }
+
+  // Stream newline-delimited JSON events to the browser:
+  //   {"type":"sources","sources":[...]}  {"type":"token","text":"..."}  {"type":"error","message":"..."}
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const upstream = ollamaResponse.body.getReader();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: unknown) =>
+        controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+      let produced = false;
+
+      const handleLine = (line: string) => {
+        if (!line.trim()) return;
+        const part = JSON.parse(line);
+        if (part.error) {
+          send({ type: "error", message: `Ollama returned an error: ${part.error}` });
+          return;
+        }
+        const text = part.message?.content;
+        if (typeof text === "string" && text) {
+          produced = true;
+          send({ type: "token", text });
+        }
+      };
+
+      send({ type: "sources", sources });
+      try {
+        let buffer = "";
+        while (true) {
+          const { done, value } = await upstream.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          lines.forEach(handleLine);
+        }
+        handleLine(buffer);
+        if (!produced) {
+          send({ type: "error", message: "Ollama returned an empty response. Please try again." });
+        }
+      } catch (error) {
+        const timedOut = error instanceof Error && error.name === "TimeoutError";
+        send({
+          type: "error",
+          message: timedOut
+            ? "The local model took too long to respond. Please try again."
+            : "The connection to Ollama was interrupted. Please try again.",
+        });
+      } finally {
+        controller.close();
+      }
+    },
+    cancel() {
+      upstream.cancel().catch(() => {});
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+    },
+  });
 }

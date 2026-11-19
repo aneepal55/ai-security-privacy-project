@@ -194,3 +194,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* RAG sources */
+.message-body { display: flex; flex-direction: column; gap: 8px; max-width: min(76%, 680px); min-width: 0; }
+.message.user .message-body { align-items: flex-end; }
+.message-body .message-bubble { max-width: 100%; }
+.message-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 4px; font-size: 11px; color: #5b7364; }
+.message-sources span { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.message-sources code { padding: 2px 8px; border: 1px solid #d5e3d9; border-radius: 999px; background: #f3f8f4; color: #24777c; font-size: 11px; }
+@media (max-width: 700px) { .message-body { max-width: 86%; } }

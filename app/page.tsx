@@ -5,6 +5,7 @@ import { FormEvent, useState } from "react";
 type Message = {
   role: "user" | "assistant";
   content: string;
+  sources?: string[];
 };
 
 export default function Home() {
@@ -22,9 +23,15 @@ export default function Home() {
       ...messages,
       { role: "user", content },
     ];
-    setMessages(nextMessages);
+    // Add an empty assistant message that fills in as tokens stream in.
+    setMessages([...nextMessages, { role: "assistant", content: "" }]);
     setInput("");
     setIsLoading(true);
+
+    const updateLast = (fn: (message: Message) => Message) =>
+      setMessages((current) =>
+        current.map((m, i) => (i === current.length - 1 ? fn(m) : m)),
+      );
 
     try {
       const response = await fetch("/api/chat", {
@@ -32,25 +39,43 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: nextMessages, model }),
       });
-      const data = await response.json();
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.message ?? "Unable to reach the chat service.");
       }
-      setMessages((current) => [
-        ...current,
-        { role: "assistant", content: data.message },
-      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const handleLine = (line: string) => {
+        if (!line.trim()) return;
+        const evt = JSON.parse(line);
+        if (evt.type === "sources") {
+          updateLast((m) => ({ ...m, sources: evt.sources }));
+        } else if (evt.type === "token") {
+          updateLast((m) => ({ ...m, content: m.content + evt.text }));
+        } else if (evt.type === "error") {
+          throw new Error(evt.message);
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        lines.forEach(handleLine);
+      }
+      handleLine(buffer);
     } catch (error) {
-      setMessages((current) => [
-        ...current,
-        {
-          role: "assistant",
-          content:
-            error instanceof Error
-              ? error.message
-              : "Sorry, something went wrong.",
-        },
-      ]);
+      const text =
+        error instanceof Error ? error.message : "Sorry, something went wrong.";
+      updateLast((m) => ({
+        ...m,
+        content: m.content ? `${m.content}\n\n${text}` : text,
+      }));
     } finally {
       setIsLoading(false);
     }
@@ -141,7 +166,9 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            messages.map((message, index) => (
+            messages
+              .filter((message) => message.role === "user" || message.content)
+              .map((message, index) => (
               <div
                 className={`message ${message.role}`}
                 key={`${message.role}-${index}`}
@@ -149,11 +176,21 @@ export default function Home() {
                 {message.role === "assistant" && (
                   <div className="message-avatar" aria-hidden="true">✳</div>
                 )}
-                <div className="message-bubble">{message.content}</div>
+                <div className="message-body">
+                  <div className="message-bubble">{message.content}</div>
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="message-sources">
+                      <span>Sources</span>
+                      {message.sources.map((source) => (
+                        <code key={source}>{source}</code>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             ))
           )}
-          {isLoading && (
+          {isLoading && !messages[messages.length - 1]?.content && (
             <div className="message assistant">
               <div className="message-avatar" aria-hidden="true">✳</div>
               <div className="message-bubble typing" aria-label="Thinking">
